@@ -348,6 +348,9 @@
         </div>
         <button type="submit" class="btn">Sign In</button>
         <div id="login-msg" class="message" style="display: none;"></div>
+        <div class="switch-link">
+          <a href="#" onclick="resetPassword()">Forgot password?</a>
+        </div>
       </form>
 
       <!-- Registration Form -->
@@ -362,7 +365,7 @@
         </div>
         <div class="form-group">
           <label for="register-code">Industry Code</label>
-          <input id="register-code" type="text" required placeholder="Enter industry code (e.g., 000000)">
+          <input id="register-code" type="text" required placeholder="Enter industry code (e.g., 000000 for master)">
         </div>
         <button type="submit" class="btn">Create Account</button>
         <div id="register-msg" class="message" style="display: none;"></div>
@@ -451,11 +454,15 @@
         <div class="form-group">
           <label for="template-name">Create New Template</label>
           <input id="template-name" type="text" placeholder="Enter template name">
+          <label for="template-code">Industry Code (optional, auto-generate if blank)</label>
+          <input id="template-code" type="text" placeholder="Enter or generate code">
           <button id="create-template" class="btn btn-small">Create Template</button>
         </div>
         <div class="form-group">
           <label for="template-file">Upload Template File (XLSX)</label>
           <input id="template-file" type="file" accept=".xlsx">
+          <label for="upload-code">Industry Code for all (optional, auto-generate per if blank)</label>
+          <input id="upload-code" type="text" placeholder="Enter code for all templates">
           <button id="upload-template" class="btn btn-small">Upload Templates</button>
         </div>
         <div id="template-management"></div>
@@ -470,7 +477,7 @@
   </div>
 
   <script>
-    // EmailJS Configuration
+    // EmailJS Configuration (unused but kept for potential future use)
     const EMAILJS_SERVICE_ID = 'service_ghvr7ui';
     const EMAILJS_TEMPLATE_ID = 'template_x4lt4dk';
     emailjs.init('gtluK1AW_Y5bE9mVp');
@@ -598,15 +605,17 @@
     // Authentication Functions
     async function handleLogin(email, password) {
       try {
+        console.log('Attempting login with email:', email);
         showMessage('login-msg', 'Signing in...', 'info');
         const result = await auth.signInWithEmailAndPassword(email, password);
         currentUser = result.user;
         console.log('Login successful, UID:', currentUser.uid);
         await loadUserData();
+        console.log('User role:', userRole, 'User data:', userData);
         hideMessage('login-msg');
         showMainApp();
       } catch (err) {
-        console.error('Login error:', err);
+        console.error('Login error:', err.code, err.message);
         let message = 'Login failed. Please check your credentials.';
         if (err.code === 'auth/user-not-found') {
           message = 'No account found with this email. Please sign up.';
@@ -614,6 +623,8 @@
           message = 'Incorrect password. Try again.';
         } else if (err.code === 'auth/invalid-login-credentials') {
           message = 'Invalid login credentials. Check your email and password.';
+        } else if (err.code === 'auth/invalid-email') {
+          message = 'Invalid email format.';
         }
         showMessage('login-msg', message, 'error');
       }
@@ -653,19 +664,32 @@
       }
     }
 
+    function resetPassword() {
+      const email = document.getElementById('login-email').value;
+      if (email) {
+        auth.sendPasswordResetEmail(email)
+          .then(() => showMessage('login-msg', 'Password reset email sent! Check your inbox.', 'success'))
+          .catch(err => showMessage('login-msg', 'Error sending reset email: ' + err.message, 'error'));
+      } else {
+        showMessage('login-msg', 'Please enter your email to reset password.', 'error');
+      }
+    }
+
     async function loadUserData() {
       if (!currentUser) return;
       try {
         const doc = await db.collection('users').doc(currentUser.uid).get();
         if (doc.exists) {
           userData = doc.data();
-          userRole = userData.role;
+          userRole = userData.role || 'client'; // Default to client if role missing
           console.log('User data loaded:', userData);
         } else {
           console.warn('No user data found for UID:', currentUser.uid);
+          showMessage('login-msg', 'User data not found. Please register or contact support.', 'error');
         }
       } catch (err) {
         console.error('Error loading user data:', err);
+        showMessage('login-msg', 'Error loading user data: ' + err.message, 'error');
       }
     }
 
@@ -730,6 +754,8 @@
         <p><strong>Role:</strong> ${userRole || 'Not set'}</p>
         <p><strong>Industry Code:</strong> ${userData.industryCode || 'Not set'}</p>
       `;
+      document.getElementById('account-name').value = userData.name || '';
+      document.getElementById('account-details').value = userData.details || '';
     }
 
     // Template Functions
@@ -745,16 +771,20 @@
           const snapshot = await db.collection('templates').where('code', '==', userData.industryCode).get();
           templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         }
-        templates.forEach(template => {
-          const div = document.createElement('div');
-          div.innerHTML = `
-            <label>
-              <input type="checkbox" value="${template.id}" data-name="${template.name}">
-              ${template.name}
-            </label>
-          `;
-          templateList.appendChild(div);
-        });
+        if (templates.length === 0) {
+          templateList.innerHTML = '<p>No templates available for your industry code.</p>';
+        } else {
+          templates.forEach(template => {
+            const div = document.createElement('div');
+            div.innerHTML = `
+              <label>
+                <input type="radio" name="template" value="${template.id}" data-name="${template.name}">
+                ${template.name} (Code: ${template.code})
+              </label>
+            `;
+            templateList.appendChild(div);
+          });
+        }
         console.log('Templates loaded:', templates);
       } catch (err) {
         console.error('Error loading templates:', err);
@@ -768,17 +798,16 @@
         return;
       }
 
-      const selectedTemplates = Array.from(document.querySelectorAll('#template-list input:checked')).map(input => ({
-        id: input.value,
-        name: input.dataset.name
-      }));
-      if (selectedTemplates.length === 0) {
-        updateStatus('template-status', '⚠️ Please select at least one template.', 'error');
+      const selectedTemplateInput = document.querySelector('#template-list input[name="template"]:checked');
+      if (!selectedTemplateInput) {
+        updateStatus('template-status', '⚠️ Please select a template.', 'error');
         return;
       }
-
-      const prompt = `Generate an image based on the selected templates: ${selectedTemplates.map(t => t.name).join(', ')}`;
-      const templateIds = selectedTemplates.map(t => t.id);
+      const template = {
+        id: selectedTemplateInput.value,
+        name: selectedTemplateInput.dataset.name
+      };
+      const prompt = `Generate an image based on the template: ${template.name}`;
       const [w, h] = [768, 1024]; // Default size
       bothBadCount = 0;
 
@@ -787,7 +816,7 @@
 
       try {
         const items = await generateTwoImages(prompt, w, h);
-        renderGeneratedImages(items, templateIds);
+        renderGeneratedImages(items, template.id);
         showElement('feedback-section');
         updateStatus('template-status', '✅ Images generated successfully!', 'success');
       } catch (e) {
@@ -803,7 +832,7 @@
       return urls.map(url => ({ provider: 'pollinations', url }));
     }
 
-    function renderGeneratedImages(items, templateIds) {
+    function renderGeneratedImages(items, templateId) {
       const container = document.getElementById('generated-images');
       container.innerHTML = '';
       items.forEach((item, idx) => {
@@ -815,14 +844,14 @@
         `;
         container.appendChild(card);
       });
-      saveGenerationRecord(items, templateIds);
+      saveGenerationRecord(items, templateId);
     }
 
-    async function saveGenerationRecord(items, templateIds) {
+    async function saveGenerationRecord(items, templateId) {
       try {
         const record = {
           userId: currentUser.uid,
-          templateIds,
+          templateId,
           images: items.map(item => item.url),
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         };
@@ -844,7 +873,7 @@
       }
     }
 
-    async function handleFeedback(action, items, templateIds) {
+    async function handleFeedback(action, items, templateId) {
       try {
         if (action === 'like-first' || action === 'like-second') {
           const index = action === 'like-first' ? 0 : 1;
@@ -862,15 +891,14 @@
             return;
           }
           bothBadCount++;
-          const checked = document.querySelectorAll('#template-list input:checked');
-          const names = Array.from(checked).map(input => input.dataset.name);
-          const prompt = `Generate an image based on the selected templates: ${names.join(', ')}`;
+          const selectedTemplateInput = document.querySelector('#template-list input[name="template"]:checked');
+          const prompt = `Generate an image based on the template: ${selectedTemplateInput.dataset.name}`;
           const [w, h] = [768, 1024];
           updateStatus('template-status', '🎨 Regenerating images...', 'working');
           document.getElementById('generate-images').disabled = true;
           try {
             const newItems = await generateTwoImages(prompt, w, h);
-            renderGeneratedImages(newItems, templateIds);
+            renderGeneratedImages(newItems, templateId);
             updateStatus('template-status', '✅ New images generated!', 'success');
           } catch (e) {
             console.error('Regeneration error:', e);
@@ -909,7 +937,6 @@
         console.log('Records loaded:', snapshot.size);
       } catch (err) {
         console.error('Error loading records:', err);
-        updateStatus('records-status', 'Error loading records: ' + err.message, 'error');
       }
     }
 
@@ -921,10 +948,10 @@
     }
 
     // Master Functions
-    async function createTemplate(name) {
+    async function createTemplate(name, code) {
       try {
         showMessage('master-msg', 'Creating template...', 'info');
-        const code = Math.floor(100000 + Math.random() * 900000).toString();
+        if (!code) code = Math.floor(100000 + Math.random() * 900000).toString();
         await db.collection('templates').add({
           name,
           code,
@@ -932,7 +959,7 @@
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         console.log('Template created:', { name, code });
-        showMessage('master-msg', `Template created successfully! Code: ${code}`, 'success');
+        showMessage('master-msg', 'Template created successfully!', 'success');
         renderTemplateManagement();
       } catch (err) {
         console.error('Template creation error:', err);
@@ -940,7 +967,7 @@
       }
     }
 
-    async function uploadTemplates(file) {
+    async function uploadTemplates(file, uploadCode) {
       try {
         showMessage('master-msg', 'Processing template file...', 'info');
         const templates = await processXlsxFile(file);
@@ -948,20 +975,20 @@
           showMessage('master-msg', 'No valid templates found in file.', 'error');
           return;
         }
-        const code = Math.floor(100000 + Math.random() * 900000).toString();
         const batch = db.batch();
         templates.forEach(name => {
+          const templateCode = uploadCode || Math.floor(100000 + Math.random() * 900000).toString();
           const docRef = db.collection('templates').doc();
           batch.set(docRef, {
             name,
-            code,
+            code: templateCode,
             createdBy: currentUser.uid,
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
           });
         });
         await batch.commit();
         console.log('Templates uploaded:', templates);
-        showMessage('master-msg', `Successfully uploaded ${templates.length} templates with shared code ${code}!`, 'success');
+        showMessage('master-msg', `Successfully uploaded ${templates.length} templates!`, 'success');
         renderTemplateManagement();
       } catch (err) {
         console.error('Template upload error:', err);
@@ -994,14 +1021,18 @@
       try {
         const snapshot = await db.collection('templates').get();
         const templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        templates.forEach(template => {
-          const div = document.createElement('div');
-          div.innerHTML = `
-            <p>${template.name} (Code: ${template.code})
-            <button class="btn btn-small" onclick="deleteTemplate('${template.id}')">Delete</button></p>
-          `;
-          managementDiv.appendChild(div);
-        });
+        if (templates.length === 0) {
+          managementDiv.innerHTML += '<p>No templates available.</p>';
+        } else {
+          templates.forEach(template => {
+            const div = document.createElement('div');
+            div.innerHTML = `
+              <p>${template.name} (Code: ${template.code})
+              <button class="btn btn-small" onclick="deleteTemplate('${template.id}')">Delete</button></p>
+            `;
+            managementDiv.appendChild(div);
+          });
+        }
         console.log('Template management rendered:', templates);
       } catch (err) {
         console.error('Error rendering templates:', err);
@@ -1019,8 +1050,10 @@
 
     function updateStatus(id, message, type = '') {
       const statusEl = document.getElementById(id);
-      statusEl.textContent = message;
-      statusEl.className = type ? `status-${type}` : '';
+      if (statusEl) {
+        statusEl.textContent = message;
+        statusEl.className = type ? `status status-${type}` : 'status';
+      }
     }
 
     // Event Listeners
@@ -1089,32 +1122,32 @@
       document.getElementById('generate-images').addEventListener('click', generateImages);
       document.getElementById('like-first').addEventListener('click', () => {
         const items = Array.from(document.querySelectorAll('#generated-images img')).map(img => ({ url: img.src }));
-        const checked = document.querySelectorAll('#template-list input:checked');
-        const templateIds = Array.from(checked).map(input => input.value);
-        handleFeedback('like-first', items, templateIds);
+        const templateId = document.querySelector('#template-list input[name="template"]:checked').value;
+        handleFeedback('like-first', items, templateId);
       });
       document.getElementById('like-second').addEventListener('click', () => {
         const items = Array.from(document.querySelectorAll('#generated-images img')).map(img => ({ url: img.src }));
-        const checked = document.querySelectorAll('#template-list input:checked');
-        const templateIds = Array.from(checked).map(input => input.value);
-        handleFeedback('like-second', items, templateIds);
+        const templateId = document.querySelector('#template-list input[name="template"]:checked').value;
+        handleFeedback('like-second', items, templateId);
       });
       document.getElementById('both-bad').addEventListener('click', () => {
         const items = Array.from(document.querySelectorAll('#generated-images img')).map(img => ({ url: img.src }));
-        const checked = document.querySelectorAll('#template-list input:checked');
-        const templateIds = Array.from(checked).map(input => input.value);
-        handleFeedback('both-bad', items, templateIds);
+        const templateId = document.querySelector('#template-list input[name="template"]:checked').value;
+        handleFeedback('both-bad', items, templateId);
       });
 
       // Master controls
       document.getElementById('create-template').addEventListener('click', () => {
-        const name = document.getElementById('template-name').value;
-        if (name) createTemplate(name);
+        const name = document.getElementById('template-name').value.trim();
+        const code = document.getElementById('template-code').value.trim();
+        if (name) createTemplate(name, code);
+        else showMessage('master-msg', 'Template name is required.', 'error');
       });
       document.getElementById('upload-template').addEventListener('click', () => {
         const fileInput = document.getElementById('template-file');
+        const uploadCode = document.getElementById('upload-code').value.trim();
         if (fileInput.files.length) {
-          uploadTemplates(fileInput.files[0]);
+          uploadTemplates(fileInput.files[0], uploadCode);
         } else {
           showMessage('master-msg', 'Please select an XLSX file.', 'error');
         }
@@ -1123,14 +1156,6 @@
 
       // Initialize
       showAuth();
-
-      // Pre-fill master account for registration (to create master account)
-      if (!currentUser) {
-        showRegister();
-        document.getElementById('register-email').value = 'langtechgroup5@gmail.com';
-        document.getElementById('register-password').value = 'qaz1234567890-';
-        document.getElementById('register-code').value = '000000';
-      }
     });
 
     // Expose functions for inline onclick
