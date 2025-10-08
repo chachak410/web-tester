@@ -682,6 +682,12 @@
         if (doc.exists) {
           userData = doc.data();
           userRole = userData.role || 'client'; // Default to client if role missing
+          // Auto-fix master role if industryCode is '000000'
+          if (userData.industryCode === '000000' && userRole !== 'master') {
+            userRole = 'master';
+            await db.collection('users').doc(currentUser.uid).update({ role: 'master' });
+            console.log('Auto-fixed role to master for industryCode 000000');
+          }
           console.log('User data loaded:', userData);
         } else {
           console.warn('No user data found for UID:', currentUser.uid);
