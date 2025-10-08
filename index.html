@@ -935,7 +935,7 @@
           updateStatus('template-status', '✅ Image downloaded!', 'success');
           hideElement('feedback-section');
         } else if (action === 'both-bad') {
-          if (bothBadCount >= MAX_BOTH_BAD) {
+          if (bothBadCount >= MAX_BOTH_BAD && userRole !== 'master') {
             updateStatus('template-status', '❌ Maximum regeneration attempts reached.', 'error');
             hideElement('feedback-section');
             return;
