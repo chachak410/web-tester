@@ -1,0 +1,1029 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AI Design Generator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/emailjs-com@3/dist/email.min.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body { 
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .container {
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+      overflow: hidden;
+      width: 100%;
+      max-width: 600px;
+      margin: 20px;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 40px 30px;
+      text-align: center;
+    }
+
+    .header h1 {
+      font-size: 2.2em;
+      margin-bottom: 10px;
+      font-weight: 300;
+    }
+
+    .header p {
+      opacity: 0.9;
+      font-size: 1.1em;
+    }
+
+    .content {
+      padding: 40px 30px;
+    }
+
+    .form-group {
+      margin-bottom: 25px;
+    }
+
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 500;
+      color: #333;
+    }
+
+    .form-group input, .form-group select, .form-group textarea {
+      width: 100%;
+      padding: 15px;
+      border: 2px solid #e1e5e9;
+      border-radius: 10px;
+      font-size: 16px;
+      transition: border-color 0.3s, box-shadow 0.3s;
+    }
+
+    .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+
+    .btn {
+      width: 100%;
+      padding: 15px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 25px rgba(102, 126, 234, 0.3);
+    }
+
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-secondary {
+      background: #6c757d;
+      margin-top: 10px;
+    }
+
+    .btn-small {
+      width: auto;
+      padding: 10px 20px;
+      font-size: 14px;
+      margin: 5px;
+    }
+
+    .message {
+      padding: 12px;
+      border-radius: 8px;
+      margin: 15px 0;
+      text-align: center;
+      font-weight: 500;
+    }
+
+    .message.error {
+      background: #ffebee;
+      color: #c62828;
+      border: 1px solid #ffcdd2;
+    }
+
+    .message.success {
+      background: #e8f5e8;
+      color: #2e7d32;
+      border: 1px solid #c8e6c9;
+    }
+
+    .message.info {
+      background: #e3f2fd;
+      color: #1976d2;
+      border: 1px solid #bbdefb;
+    }
+
+    .switch-link {
+      text-align: center;
+      margin-top: 25px;
+    }
+
+    .switch-link a {
+      color: #667eea;
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    .switch-link a:hover {
+      text-decoration: underline;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .main-app {
+      display: none;
+      min-height: 100vh;
+      width: 100%;
+      background: #f8f9fa;
+    }
+
+    .main-app.show {
+      display: block;
+    }
+
+    .app-header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+
+    .app-header h1 {
+      font-size: 1.8em;
+      font-weight: 300;
+    }
+
+    .nav-btn {
+      padding: 10px 20px;
+      background: rgba(255,255,255,0.2);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: white;
+      border-radius: 8px;
+      cursor: pointer;
+      margin-left: 10px;
+    }
+
+    .nav-btn:hover {
+      background: rgba(255,255,255,0.3);
+    }
+
+    .app-content {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 30px 20px;
+    }
+
+    .controls {
+      background: white;
+      border-radius: 15px;
+      padding: 30px;
+      box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+      margin-bottom: 30px;
+    }
+
+    .row {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+      margin-bottom: 25px;
+      align-items: end;
+    }
+
+    .row > * {
+      flex: 1;
+      min-width: 200px;
+    }
+
+    .generate-btn {
+      background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 20px;
+    }
+
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 15px;
+      box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+    }
+
+    .card img {
+      width: 100%;
+      height: auto;
+      border-radius: 8px;
+      margin-bottom: 10px;
+    }
+
+    .badge {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+      display: inline-block;
+      margin-bottom: 10px;
+    }
+
+    .status {
+      margin: 15px 0;
+      padding: 12px;
+      border-radius: 8px;
+      font-weight: 500;
+    }
+
+    .status-working {
+      background: #e3f2fd;
+      color: #1976d2;
+      border: 1px solid #bbdefb;
+    }
+
+    .status-success {
+      background: #e8f5e8;
+      color: #2e7d32;
+      border: 1px solid #c8e6c9;
+    }
+
+    .status-error {
+      background: #ffebee;
+      color: #c62828;
+      border: 1px solid #ffcdd2;
+    }
+
+    .template-list {
+      margin-bottom: 20px;
+    }
+
+    .template-list label {
+      display: block;
+      margin-bottom: 10px;
+    }
+
+    @media (max-width: 768px) {
+      .row {
+        flex-direction: column;
+      }
+
+      .row > * {
+        min-width: unset;
+      }
+
+      .app-header {
+        flex-direction: column;
+        gap: 15px;
+        text-align: center;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Authentication Container -->
+  <div id="auth-container" class="container">
+    <div class="header">
+      <h1>🎨 AI Design Generator</h1>
+      <p>Create stunning images with AI</p>
+    </div>
+
+    <div class="content">
+      <!-- Login Form -->
+      <form id="login-form">
+        <div class="form-group">
+          <label for="login-email">Email Address</label>
+          <input id="login-email" type="email" required autocomplete="username" placeholder="Enter your email">
+        </div>
+        <div class="form-group">
+          <label for="login-password">Password</label>
+          <input id="login-password" type="password" required autocomplete="current-password" placeholder="Enter your password">
+        </div>
+        <button type="submit" class="btn">Sign In</button>
+        <div id="login-msg" class="message" style="display: none;"></div>
+      </form>
+
+      <!-- Registration Form -->
+      <form id="register-form" class="hidden">
+        <div class="form-group">
+          <label for="register-email">Email Address</label>
+          <input id="register-email" type="email" required autocomplete="username" placeholder="Enter your email">
+        </div>
+        <div class="form-group">
+          <label for="register-password">Password</label>
+          <input id="register-password" type="password" required autocomplete="new-password" placeholder="Create a password">
+        </div>
+        <div class="form-group">
+          <label for="register-code">Industry Code</label>
+          <input id="register-code" type="text" required placeholder="Enter industry code (e.g., 000000)">
+        </div>
+        <button type="submit" class="btn">Create Account</button>
+        <div id="register-msg" class="message" style="display: none;"></div>
+      </form>
+
+      <div class="switch-link">
+        <span id="switch-to-register">Don't have an account? <a href="#" onclick="showRegister(); return false;">Sign up</a></span>
+        <span id="switch-to-login" class="hidden">Already have an account? <a href="#" onclick="showLogin(); return false;">Sign in</a></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Application -->
+  <div id="main-app" class="main-app">
+    <div class="app-header">
+      <h1>🎨 AI Design Generator</h1>
+      <div>
+        <button id="setup-btn" class="nav-btn">Setup</button>
+        <button id="account-btn" class="nav-btn">Account</button>
+        <button id="template-btn" class="nav-btn">Templates</button>
+        <button id="records-btn" class="nav-btn">Past Records</button>
+        <button id="master-btn" class="nav-btn hidden">Master Controls</button>
+        <button id="logout-btn" class="nav-btn">Logout</button>
+      </div>
+    </div>
+
+    <div class="app-content">
+      <!-- Setup Page -->
+      <div id="setup-page" class="controls hidden">
+        <h2>Setup Your Profile</h2>
+        <form id="setup-form">
+          <div class="form-group">
+            <label for="setup-name">Full Name</label>
+            <input id="setup-name" type="text" required placeholder="Enter your full name">
+          </div>
+          <div class="form-group">
+            <label for="setup-details">Additional Details</label>
+            <textarea id="setup-details" placeholder="Optional details"></textarea>
+          </div>
+          <button type="submit" class="btn">Save Profile</button>
+          <div id="setup-msg" class="message" style="display: none;"></div>
+        </form>
+      </div>
+
+      <!-- Account Page -->
+      <div id="account-page" class="controls hidden">
+        <h2>Account Information</h2>
+        <div id="account-info"></div>
+        <form id="account-form">
+          <div class="form-group">
+            <label for="account-name">Full Name</label>
+            <input id="account-name" type="text" required placeholder="Enter your full name">
+          </div>
+          <div class="form-group">
+            <label for="account-details">Additional Details</label>
+            <textarea id="account-details" placeholder="Optional details"></textarea>
+          </div>
+          <button type="submit" class="btn">Update Profile</button>
+          <div id="account-msg" class="message" style="display: none;"></div>
+        </form>
+      </div>
+
+      <!-- Template Page -->
+      <div id="template-page" class="controls hidden">
+        <h2>Select Template</h2>
+        <div id="template-list" class="template-list"></div>
+        <button id="generate-images" class="btn generate-btn">✨ Generate Images</button>
+        <div id="template-status" class="status"></div>
+        <div id="generated-images" class="grid"></div>
+        <div id="feedback-section" class="hidden">
+          <button id="like-first" class="btn btn-small">I like this</button>
+          <button id="like-second" class="btn btn-small">I like that</button>
+          <button id="both-bad" class="btn btn-small">Both bad</button>
+        </div>
+      </div>
+
+      <!-- Past Records Page -->
+      <div id="records-page" class="controls hidden">
+        <h2>Past Records</h2>
+        <div id="records-list" class="grid"></div>
+      </div>
+
+      <!-- Master Controls Page -->
+      <div id="master-page" class="controls hidden">
+        <h2>Master Controls</h2>
+        <div class="form-group">
+          <label for="template-name">Create New Template</label>
+          <input id="template-name" type="text" placeholder="Enter template name">
+          <button id="create-template" class="btn btn-small">Create Template</button>
+        </div>
+        <div id="template-management"></div>
+        <div class="form-group">
+          <label for="industry-code">Generate Industry Code</label>
+          <input id="industry-code" type="text" readonly>
+          <button id="generate-code" class="btn btn-small">Generate Code</button>
+        </div>
+        <div id="master-msg" class="message" style="display: none;"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // EmailJS Configuration
+    const EMAILJS_SERVICE_ID = 'service_ghvr7ui';
+    const EMAILJS_TEMPLATE_ID = 'template_x4lt4dk';
+    emailjs.init('gtluK1AW_Y5bE9mVp');
+
+    // Firebase Configuration
+    const firebaseConfig = {
+      apiKey: "AIzaSyBtF_37PsX1ItQobFZkOVSMUEio2NPmdoM",
+      authDomain: "login-system-ae45f.firebaseapp.com",
+      projectId: "login-system-ae45f",
+      storageBucket: "login-system-ae45f.firebasestorage.app",
+      messagingSenderId: "178893070717",
+      appId: "1:178893070717:web:e2bc8f79ce87f85391ec14",
+      measurementId: "G-Y4H7X7DJ88"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+
+    // Global state
+    let currentUser = null;
+    let userRole = null;
+    let userData = {};
+    let bothBadCount = 0;
+    const MAX_BOTH_BAD = 20;
+
+    // UI Helper Functions
+    function showElement(id) {
+      const el = document.getElementById(id);
+      if (el) el.classList.remove('hidden');
+    }
+
+    function hideElement(id) {
+      const el = document.getElementById(id);
+      if (el) el.classList.add('hidden');
+    }
+
+    function showMessage(id, message, type = 'info') {
+      const el = document.getElementById(id);
+      if (el) {
+        el.textContent = message;
+        el.className = `message ${type}`;
+        el.style.display = 'block';
+      }
+    }
+
+    function hideMessage(id) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    }
+
+    function showLogin() {
+      showElement('login-form');
+      hideElement('register-form');
+      showElement('switch-to-register');
+      hideElement('switch-to-login');
+      hideMessage('login-msg');
+    }
+
+    function showRegister() {
+      hideElement('login-form');
+      showElement('register-form');
+      hideElement('switch-to-register');
+      showElement('switch-to-login');
+      document.getElementById('register-form').reset();
+      hideMessage('register-msg');
+    }
+
+    function showPage(pageId) {
+      ['setup-page', 'account-page', 'template-page', 'records-page', 'master-page'].forEach(id => {
+        if (id === pageId) showElement(id);
+        else hideElement(id);
+      });
+    }
+
+    function showMainApp() {
+      document.getElementById('auth-container').style.display = 'none';
+      document.getElementById('main-app').classList.add('show');
+      if (userRole === 'master') showElement('master-btn');
+      if (!userData.name) showPage('setup-page');
+      else showPage('template-page');
+    }
+
+    function showAuth() {
+      document.getElementById('auth-container').style.display = 'block';
+      document.getElementById('main-app').classList.remove('show');
+      showLogin();
+    }
+
+    // Authentication Functions
+    async function handleLogin(email, password) {
+      try {
+        showMessage('login-msg', 'Signing in...', 'info');
+        const result = await auth.signInWithEmailAndPassword(email, password);
+        currentUser = result.user;
+        await loadUserData();
+        hideMessage('login-msg');
+        showMainApp();
+      } catch (err) {
+        showMessage('login-msg', err.message, 'error');
+      }
+    }
+
+    async function handleRegister(email, password, code) {
+      try {
+        showMessage('register-msg', 'Creating account...', 'info');
+        // Validate industry code
+        const templateDoc = await db.collection('templates').where('code', '==', code).get();
+        if (templateDoc.empty && code !== '000000') {
+          showMessage('register-msg', 'Invalid industry code.', 'error');
+          return;
+        }
+        const result = await auth.createUserWithEmailAndPassword(email, password);
+        currentUser = result.user;
+        const role = code === '000000' ? 'master' : 'client';
+        await db.collection('users').doc(currentUser.uid).set({
+          email,
+          role,
+          industryCode: code,
+          name: '',
+          details: '',
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        userRole = role;
+        userData = { email, role, industryCode: code, name: '', details: '' };
+        showMessage('register-msg', 'Account created successfully!', 'success');
+        setTimeout(() => showMainApp(), 1000);
+      } catch (err) {
+        showMessage('register-msg', err.message, 'error');
+      }
+    }
+
+    async function loadUserData() {
+      if (!currentUser) return;
+      const doc = await db.collection('users').doc(currentUser.uid).get();
+      if (doc.exists) {
+        userData = doc.data();
+        userRole = userData.role;
+      }
+    }
+
+    function handleLogout() {
+      auth.signOut().then(() => {
+        currentUser = null;
+        userRole = null;
+        userData = {};
+        bothBadCount = 0;
+        showAuth();
+      });
+    }
+
+    // Setup and Account Functions
+    async function handleSetup(name, details) {
+      try {
+        showMessage('setup-msg', 'Saving profile...', 'info');
+        await db.collection('users').doc(currentUser.uid).update({
+          name,
+          details,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        userData.name = name;
+        userData.details = details;
+        showMessage('setup-msg', 'Profile saved successfully!', 'success');
+        setTimeout(() => showPage('template-page'), 1000);
+      } catch (err) {
+        showMessage('setup-msg', err.message, 'error');
+      }
+    }
+
+    async function handleAccountUpdate(name, details) {
+      try {
+        showMessage('account-msg', 'Updating profile...', 'info');
+        await db.collection('users').doc(currentUser.uid).update({
+          name,
+          details,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        userData.name = name;
+        userData.details = details;
+        showMessage('account-msg', 'Profile updated successfully!', 'success');
+        renderAccountInfo();
+      } catch (err) {
+        showMessage('account-msg', err.message, 'error');
+      }
+    }
+
+    function renderAccountInfo() {
+      const infoDiv = document.getElementById('account-info');
+      infoDiv.innerHTML = `
+        <p><strong>Email:</strong> ${userData.email}</p>
+        <p><strong>Name:</strong> ${userData.name || 'Not set'}</p>
+        <p><strong>Details:</strong> ${userData.details || 'Not set'}</p>
+        <p><strong>Role:</strong> ${userRole}</p>
+        <p><strong>Industry Code:</strong> ${userData.industryCode}</p>
+      `;
+    }
+
+    // Template Functions
+    async function loadTemplates() {
+      const templateList = document.getElementById('template-list');
+      templateList.innerHTML = '';
+      let templates = [];
+      if (userRole === 'master') {
+        const snapshot = await db.collection('templates').get();
+        templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      } else {
+        const snapshot = await db.collection('templates').where('code', '==', userData.industryCode).get();
+        templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      }
+      templates.forEach(template => {
+        const div = document.createElement('div');
+        div.innerHTML = `
+          <label>
+            <input type="checkbox" value="${template.id}" data-name="${template.name}">
+            ${template.name}
+          </label>
+        `;
+        templateList.appendChild(div);
+      });
+    }
+
+    async function generateImages() {
+      if (!currentUser) {
+        updateStatus('template-status', '⚠️ Please sign in first.', 'error');
+        return;
+      }
+
+      const selectedTemplates = Array.from(document.querySelectorAll('#template-list input:checked')).map(input => ({
+        id: input.value,
+        name: input.dataset.name
+      }));
+      if (selectedTemplates.length === 0) {
+        updateStatus('template-status', '⚠️ Please select at least one template.', 'error');
+        return;
+      }
+
+      const template = selectedTemplates[0]; // Use first selected template
+      const prompt = `Generate an image based on the template: ${template.name}`;
+      const [w, h] = [768, 1024]; // Default size
+      bothBadCount = 0;
+
+      updateStatus('template-status', '🎨 Generating images...', 'working');
+      document.getElementById('generate-images').disabled = true;
+
+      try {
+        const items = await generateTwoImages(prompt, w, h);
+        renderGeneratedImages(items, template.id);
+        showElement('feedback-section');
+        updateStatus('template-status', '✅ Images generated successfully!', 'success');
+      } catch (e) {
+        updateStatus('template-status', `❌ Error: ${e.message || e}`, 'error');
+      } finally {
+        document.getElementById('generate-images').disabled = false;
+      }
+    }
+
+    async function generateTwoImages(prompt, width, height) {
+      const urls = pollinationsUrls(prompt, 2, width, height, Date.now());
+      return urls.map(url => ({ provider: 'pollinations', url }));
+    }
+
+    function renderGeneratedImages(items, templateId) {
+      const container = document.getElementById('generated-images');
+      container.innerHTML = '';
+      items.forEach((item, idx) => {
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = `
+          <div class="badge">${item.provider}</div>
+          <img src="${item.url}" alt="Generated image ${idx + 1}" loading="lazy"/>
+        `;
+        container.appendChild(card);
+      });
+      saveGenerationRecord(items, templateId);
+    }
+
+    async function saveGenerationRecord(items, templateId) {
+      const record = {
+        userId: currentUser.uid,
+        templateId,
+        images: items.map(item => item.url),
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      };
+      await db.collection('generations').add(record);
+      // Keep only the last 3 records
+      const snapshot = await db.collection('generations')
+        .where('userId', '==', currentUser.uid)
+        .orderBy('createdAt', 'desc')
+        .get();
+      const records = snapshot.docs;
+      if (records.length > 3) {
+        for (let i = 3; i < records.length; i++) {
+          await db.collection('generations').doc(records[i].id).delete();
+        }
+      }
+    }
+
+    async function handleFeedback(action, items, templateId) {
+      if (action === 'like-first' || action === 'like-second') {
+        const index = action === 'like-first' ? 0 : 1;
+        const url = items[index].url;
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `generated-image-${Date.now()}.png`;
+        link.click();
+        updateStatus('template-status', '✅ Image downloaded!', 'success');
+        hideElement('feedback-section');
+      } else if (action === 'both-bad') {
+        if (bothBadCount >= MAX_BOTH_BAD) {
+          updateStatus('template-status', '❌ Maximum regeneration attempts reached.', 'error');
+          hideElement('feedback-section');
+          return;
+        }
+        bothBadCount++;
+        const template = document.querySelector('#template-list input:checked');
+        const prompt = `Generate an image based on the template: ${template.dataset.name}`;
+        const [w, h] = [768, 1024];
+        updateStatus('template-status', '🎨 Regenerating images...', 'working');
+        document.getElementById('generate-images').disabled = true;
+        try {
+          const newItems = await generateTwoImages(prompt, w, h);
+          renderGeneratedImages(newItems, templateId);
+          updateStatus('template-status', '✅ New images generated!', 'success');
+        } catch (e) {
+          updateStatus('template-status', `❌ Error: ${e.message || e}`, 'error');
+        } finally {
+          document.getElementById('generate-images').disabled = false;
+        }
+      }
+    }
+
+    async function loadRecords() {
+      const recordsList = document.getElementById('records-list');
+      recordsList.innerHTML = '';
+      const snapshot = await db.collection('generations')
+        .where('userId', '==', currentUser.uid)
+        .orderBy('createdAt', 'desc')
+        .limit(3)
+        .get();
+      snapshot.forEach(doc => {
+        const record = doc.data();
+        record.images.forEach((url, idx) => {
+          const card = document.createElement('div');
+          card.className = 'card';
+          card.innerHTML = `
+            <img src="${url}" alt="Past image ${idx + 1}" loading="lazy"/>
+            <button class="btn btn-small" onclick="downloadImage('${url}')">Download</button>
+          `;
+          recordsList.appendChild(card);
+        });
+      });
+    }
+
+    function downloadImage(url) {
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `past-image-${Date.now()}.png`;
+      link.click();
+    }
+
+    // Master Functions
+    async function createTemplate(name) {
+      try {
+        showMessage('master-msg', 'Creating template...', 'info');
+        const code = Math.floor(100000 + Math.random() * 900000).toString();
+        await db.collection('templates').add({
+          name,
+          code,
+          createdBy: currentUser.uid,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        showMessage('master-msg', 'Template created successfully!', 'success');
+        renderTemplateManagement();
+      } catch (err) {
+        showMessage('master-msg', err.message, 'error');
+      }
+    }
+
+    async function deleteTemplate(templateId) {
+      try {
+        showMessage('master-msg', 'Deleting template...', 'info');
+        await db.collection('templates').doc(templateId).delete();
+        showMessage('master-msg', 'Template deleted successfully!', 'success');
+        renderTemplateManagement();
+      } catch (err) {
+        showMessage('master-msg', err.message, 'error');
+      }
+    }
+
+    async function generateIndustryCode() {
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      document.getElementById('industry-code').value = code;
+      showMessage('master-msg', 'Industry code generated!', 'success');
+    }
+
+    async function renderTemplateManagement() {
+      const managementDiv = document.getElementById('template-management');
+      managementDiv.innerHTML = '<h3>Manage Templates</h3>';
+      const snapshot = await db.collection('templates').get();
+      const templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      templates.forEach(template => {
+        const div = document.createElement('div');
+        div.innerHTML = `
+          <p>${template.name} (Code: ${template.code})
+          <button class="btn btn-small" onclick="deleteTemplate('${template.id}')">Delete</button></p>
+        `;
+        managementDiv.appendChild(div);
+      });
+    }
+
+    // Image Generation Functions
+    function pollinationsUrls(prompt, count, width, height, seed) {
+      const quoted = encodeURIComponent(prompt);
+      const base = `https://image.pollinations.ai/prompt/${quoted}?width=${width}&height=${height}&n=1`;
+      const startSeed = Number.isInteger(seed) ? seed : Date.now();
+      return Array.from({length: count}, (_, i) => `${base}&seed=${startSeed + i}`);
+    }
+
+    function updateStatus(id, message, type = '') {
+      const statusEl = document.getElementById(id);
+      statusEl.textContent = message;
+      statusEl.className = type ? `status-${type}` : '';
+    }
+
+    // Event Listeners
+    document.addEventListener('DOMContentLoaded', function() {
+      // Login form
+      document.getElementById('login-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const email = document.getElementById('login-email').value;
+        const password = document.getElementById('login-password').value;
+        handleLogin(email, password);
+      });
+
+      // Registration form
+      document.getElementById('register-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const email = document.getElementById('register-email').value;
+        const password = document.getElementById('register-password').value;
+        const code = document.getElementById('register-code').value.trim();
+        handleRegister(email, password, code);
+      });
+
+      // Setup form
+      document.getElementById('setup-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const name = document.getElementById('setup-name').value;
+        const details = document.getElementById('setup-details').value;
+        handleSetup(name, details);
+      });
+
+      // Account form
+      document.getElementById('account-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const name = document.getElementById('account-name').value;
+        const details = document.getElementById('account-details').value;
+        handleAccountUpdate(name, details);
+      });
+
+      // Navigation buttons
+      document.getElementById('setup-btn').addEventListener('click', () => {
+        showPage('setup-page');
+      });
+
+      document.getElementById('account-btn').addEventListener('click', () => {
+        renderAccountInfo();
+        showPage('account-page');
+      });
+
+      document.getElementById('template-btn').addEventListener('click', () => {
+        loadTemplates();
+        showPage('template-page');
+      });
+
+      document.getElementById('records-btn').addEventListener('click', () => {
+        loadRecords();
+        showPage('records-page');
+      });
+
+      document.getElementById('master-btn').addEventListener('click', () => {
+        renderTemplateManagement();
+        showPage('master-page');
+      });
+
+      document.getElementById('logout-btn').addEventListener('click', handleLogout);
+
+      // Template page
+      document.getElementById('generate-images').addEventListener('click', generateImages);
+      document.getElementById('like-first').addEventListener('click', () => {
+        const items = Array.from(document.querySelectorAll('#generated-images img')).map(img => ({ url: img.src }));
+        handleFeedback('like-first', items, document.querySelector('#template-list input:checked').value);
+      });
+      document.getElementById('like-second').addEventListener('click', () => {
+        const items = Array.from(document.querySelectorAll('#generated-images img')).map(img => ({ url: img.src }));
+        handleFeedback('like-second', items, document.querySelector('#template-list input:checked').value);
+      });
+      document.getElementById('both-bad').addEventListener('click', () => {
+        const items = Array.from(document.querySelectorAll('#generated-images img')).map(img => ({ url: img.src }));
+        handleFeedback('both-bad', items, document.querySelector('#template-list input:checked').value);
+      });
+
+      // Master controls
+      document.getElementById('create-template').addEventListener('click', () => {
+        const name = document.getElementById('template-name').value;
+        if (name) createTemplate(name);
+      });
+      document.getElementById('generate-code').addEventListener('click', generateIndustryCode);
+
+      // Initialize
+      showAuth();
+
+      // Pre-fill master account for convenience (in practice, remove this)
+      if (!currentUser) {
+        document.getElementById('login-email').value = 'langtechgroup5@gmail.com';
+        document.getElementById('login-password').value = 'qaz1234567890-';
+      }
+    });
+
+    // Expose deleteTemplate for inline onclick
+    window.deleteTemplate = deleteTemplate;
+    window.downloadImage = downloadImage;
+  </script>
+</body>
+</html>
