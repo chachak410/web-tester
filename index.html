@@ -9,7 +9,33 @@
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/emailjs-com@3/dist/email.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script
+  // Place after Firebase Setup
+const MASTER_EMAIL = 'langtechgroup5@gmail.com';
+
+async function ensureUserDocument() {
+  if (!currentUser) return;
+  const docRef = db.collection('users').doc(currentUser.uid);
+  let doc = await docRef.get();
+  const isMasterLogin = currentUser.email === MASTER_EMAIL;
+  if (!doc.exists) {
+    await docRef.set({
+      email: currentUser.email,
+      role: isMasterLogin ? 'master' : 'client',
+      industryCode: isMasterLogin ? '000000' : '',
+      name: '', details: '',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  } else {
+    const data = doc.data();
+    let updates = {};
+    if (isMasterLogin) {
+      if (data.role !== 'master') updates.role = 'master';
+      if (data.industryCode !== '000000') updates.industryCode = '000000';
+    }
+    if (Object.keys(updates).length > 0) await docRef.update(updates);
+  }
+}                                                                                
   <style>
     /* Your styles here (omitted for brevity, use your previous CSS!) */
     /* ... (put your CSS from your previous code here) ... */
