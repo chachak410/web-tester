@@ -792,6 +792,9 @@
         if (userRole === 'master') {
           const snapshot = await db.collection('templates').get();
           templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          if (templates.length === 0) {
+            templateList.innerHTML = '<p>No templates available. Create some using Master Controls.</p>';
+          }
         } else {
           if (!userData.industryCode) {
             templateList.innerHTML = '<p>No industry code set for your account. Please contact admin.</p>';
@@ -799,21 +802,20 @@
           }
           const snapshot = await db.collection('templates').where('code', '==', userData.industryCode).get();
           templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          if (templates.length === 0) {
+            templateList.innerHTML = '<p>No templates available for your industry code. Contact admin.</p>';
+          }
         }
-        if (templates.length === 0) {
-          templateList.innerHTML = '<p>No templates available for your industry code.</p>';
-        } else {
-          templates.forEach(template => {
-            const div = document.createElement('div');
-            div.innerHTML = `
-              <label>
-                <input type="checkbox" value="${template.id}" data-name="${template.name}">
-                ${template.name} (Code: ${template.code})
-              </label>
-            `;
-            templateList.appendChild(div);
-          });
-        }
+        templates.forEach(template => {
+          const div = document.createElement('div');
+          div.innerHTML = `
+            <label>
+              <input type="checkbox" value="${template.id}" data-name="${template.name}">
+              ${template.name} (Code: ${template.code})
+            </label>
+          `;
+          templateList.appendChild(div);
+        });
         console.log('Templates loaded:', templates);
       } catch (err) {
         console.error('Error loading templates:', err);
