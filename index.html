@@ -1,43 +1,4 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script><!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -47,6 +8,7 @@
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/emailjs-com@3/dist/email.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <style>
     * {
       margin: 0;
@@ -491,6 +453,11 @@
           <input id="template-name" type="text" placeholder="Enter template name">
           <button id="create-template" class="btn btn-small">Create Template</button>
         </div>
+        <div class="form-group">
+          <label for="template-file">Upload Template File (XLSX)</label>
+          <input id="template-file" type="file" accept=".xlsx">
+          <button id="upload-template" class="btn btn-small">Upload Templates</button>
+        </div>
         <div id="template-management"></div>
         <div class="form-group">
           <label for="industry-code">Generate Industry Code</label>
@@ -528,6 +495,42 @@
     let userData = {};
     let bothBadCount = 0;
     const MAX_BOTH_BAD = 20;
+
+    // XLSX Processing
+    function filledCell(cell) {
+      return cell !== '' && cell != null;
+    }
+
+    async function processXlsxFile(file) {
+      try {
+        const reader = new FileReader();
+        return new Promise((resolve, reject) => {
+          reader.onload = function(e) {
+            try {
+              const data = e.target.result.split(',')[1]; // Get base64 data
+              const workbook = XLSX.read(data, { type: 'base64' });
+              const firstSheetName = workbook.SheetNames[0];
+              const worksheet = workbook.Sheets[firstSheetName];
+              const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+              const filteredData = jsonData.filter(row => row.some(filledCell));
+              const headerRowIndex = filteredData.findIndex((row, index) =>
+                row.filter(filledCell).length >= (filteredData[index + 1]?.filter(filledCell).length || 0)
+              );
+              const startIndex = headerRowIndex === -1 || headerRowIndex > 25 ? 0 : headerRowIndex;
+              const templates = filteredData.slice(startIndex).map(row => row[0]?.toString().trim()).filter(name => name);
+              resolve(templates);
+            } catch (err) {
+              reject(err);
+            }
+          };
+          reader.onerror = () => reject(new Error('File reading failed'));
+          reader.readAsDataURL(file);
+        });
+      } catch (err) {
+        console.error('XLSX processing error:', err);
+        throw err;
+      }
+    }
 
     // UI Helper Functions
     function showElement(id) {
@@ -598,25 +601,38 @@
         showMessage('login-msg', 'Signing in...', 'info');
         const result = await auth.signInWithEmailAndPassword(email, password);
         currentUser = result.user;
+        console.log('Login successful, UID:', currentUser.uid);
         await loadUserData();
         hideMessage('login-msg');
         showMainApp();
       } catch (err) {
-        showMessage('login-msg', err.message, 'error');
+        console.error('Login error:', err);
+        let message = 'Login failed. Please check your credentials.';
+        if (err.code === 'auth/user-not-found') {
+          message = 'No account found with this email. Please sign up.';
+        } else if (err.code === 'auth/wrong-password') {
+          message = 'Incorrect password. Try again.';
+        } else if (err.code === 'auth/invalid-login-credentials') {
+          message = 'Invalid login credentials. Check your email and password.';
+        }
+        showMessage('login-msg', message, 'error');
       }
     }
 
     async function handleRegister(email, password, code) {
       try {
         showMessage('register-msg', 'Creating account...', 'info');
-        // Validate industry code
-        const templateDoc = await db.collection('templates').where('code', '==', code).get();
-        if (templateDoc.empty && code !== '000000') {
-          showMessage('register-msg', 'Invalid industry code.', 'error');
-          return;
+        // Allow master registration with '000000' even if templates collection is empty
+        if (code !== '000000') {
+          const templateDoc = await db.collection('templates').where('code', '==', code).get();
+          if (templateDoc.empty) {
+            showMessage('register-msg', 'Invalid industry code.', 'error');
+            return;
+          }
         }
         const result = await auth.createUserWithEmailAndPassword(email, password);
         currentUser = result.user;
+        console.log('User created with UID:', currentUser.uid);
         const role = code === '000000' ? 'master' : 'client';
         await db.collection('users').doc(currentUser.uid).set({
           email,
@@ -626,21 +642,30 @@
           details: '',
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
+        console.log('User data written to Firestore');
         userRole = role;
         userData = { email, role, industryCode: code, name: '', details: '' };
         showMessage('register-msg', 'Account created successfully!', 'success');
         setTimeout(() => showMainApp(), 1000);
       } catch (err) {
+        console.error('Registration error:', err);
         showMessage('register-msg', err.message, 'error');
       }
     }
 
     async function loadUserData() {
       if (!currentUser) return;
-      const doc = await db.collection('users').doc(currentUser.uid).get();
-      if (doc.exists) {
-        userData = doc.data();
-        userRole = userData.role;
+      try {
+        const doc = await db.collection('users').doc(currentUser.uid).get();
+        if (doc.exists) {
+          userData = doc.data();
+          userRole = userData.role;
+          console.log('User data loaded:', userData);
+        } else {
+          console.warn('No user data found for UID:', currentUser.uid);
+        }
+      } catch (err) {
+        console.error('Error loading user data:', err);
       }
     }
 
@@ -651,6 +676,9 @@
         userData = {};
         bothBadCount = 0;
         showAuth();
+      }).catch(err => {
+        console.error('Logout error:', err);
+        showMessage('login-msg', 'Logout failed: ' + err.message, 'error');
       });
     }
 
@@ -665,9 +693,11 @@
         });
         userData.name = name;
         userData.details = details;
+        console.log('Profile saved:', { name, details });
         showMessage('setup-msg', 'Profile saved successfully!', 'success');
         setTimeout(() => showPage('template-page'), 1000);
       } catch (err) {
+        console.error('Setup error:', err);
         showMessage('setup-msg', err.message, 'error');
       }
     }
@@ -682,9 +712,11 @@
         });
         userData.name = name;
         userData.details = details;
+        console.log('Profile updated:', { name, details });
         showMessage('account-msg', 'Profile updated successfully!', 'success');
         renderAccountInfo();
       } catch (err) {
+        console.error('Account update error:', err);
         showMessage('account-msg', err.message, 'error');
       }
     }
@@ -692,11 +724,11 @@
     function renderAccountInfo() {
       const infoDiv = document.getElementById('account-info');
       infoDiv.innerHTML = `
-        <p><strong>Email:</strong> ${userData.email}</p>
+        <p><strong>Email:</strong> ${userData.email || 'Not set'}</p>
         <p><strong>Name:</strong> ${userData.name || 'Not set'}</p>
         <p><strong>Details:</strong> ${userData.details || 'Not set'}</p>
-        <p><strong>Role:</strong> ${userRole}</p>
-        <p><strong>Industry Code:</strong> ${userData.industryCode}</p>
+        <p><strong>Role:</strong> ${userRole || 'Not set'}</p>
+        <p><strong>Industry Code:</strong> ${userData.industryCode || 'Not set'}</p>
       `;
     }
 
@@ -705,23 +737,29 @@
       const templateList = document.getElementById('template-list');
       templateList.innerHTML = '';
       let templates = [];
-      if (userRole === 'master') {
-        const snapshot = await db.collection('templates').get();
-        templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      } else {
-        const snapshot = await db.collection('templates').where('code', '==', userData.industryCode).get();
-        templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      try {
+        if (userRole === 'master') {
+          const snapshot = await db.collection('templates').get();
+          templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        } else {
+          const snapshot = await db.collection('templates').where('code', '==', userData.industryCode).get();
+          templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        }
+        templates.forEach(template => {
+          const div = document.createElement('div');
+          div.innerHTML = `
+            <label>
+              <input type="checkbox" value="${template.id}" data-name="${template.name}">
+              ${template.name}
+            </label>
+          `;
+          templateList.appendChild(div);
+        });
+        console.log('Templates loaded:', templates);
+      } catch (err) {
+        console.error('Error loading templates:', err);
+        updateStatus('template-status', 'Error loading templates: ' + err.message, 'error');
       }
-      templates.forEach(template => {
-        const div = document.createElement('div');
-        div.innerHTML = `
-          <label>
-            <input type="checkbox" value="${template.id}" data-name="${template.name}">
-            ${template.name}
-          </label>
-        `;
-        templateList.appendChild(div);
-      });
     }
 
     async function generateImages() {
@@ -753,6 +791,7 @@
         showElement('feedback-section');
         updateStatus('template-status', '✅ Images generated successfully!', 'success');
       } catch (e) {
+        console.error('Image generation error:', e);
         updateStatus('template-status', `❌ Error: ${e.message || e}`, 'error');
       } finally {
         document.getElementById('generate-images').disabled = false;
@@ -780,80 +819,97 @@
     }
 
     async function saveGenerationRecord(items, templateId) {
-      const record = {
-        userId: currentUser.uid,
-        templateId,
-        images: items.map(item => item.url),
-        createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      };
-      await db.collection('generations').add(record);
-      // Keep only the last 3 records
-      const snapshot = await db.collection('generations')
-        .where('userId', '==', currentUser.uid)
-        .orderBy('createdAt', 'desc')
-        .get();
-      const records = snapshot.docs;
-      if (records.length > 3) {
-        for (let i = 3; i < records.length; i++) {
-          await db.collection('generations').doc(records[i].id).delete();
+      try {
+        const record = {
+          userId: currentUser.uid,
+          templateId,
+          images: items.map(item => item.url),
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+        await db.collection('generations').add(record);
+        console.log('Generation record saved:', record);
+        // Keep only the last 3 records
+        const snapshot = await db.collection('generations')
+          .where('userId', '==', currentUser.uid)
+          .orderBy('createdAt', 'desc')
+          .get();
+        const records = snapshot.docs;
+        if (records.length > 3) {
+          for (let i = 3; i < records.length; i++) {
+            await db.collection('generations').doc(records[i].id).delete();
+          }
         }
+      } catch (err) {
+        console.error('Error saving generation record:', err);
       }
     }
 
     async function handleFeedback(action, items, templateId) {
-      if (action === 'like-first' || action === 'like-second') {
-        const index = action === 'like-first' ? 0 : 1;
-        const url = items[index].url;
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `generated-image-${Date.now()}.png`;
-        link.click();
-        updateStatus('template-status', '✅ Image downloaded!', 'success');
-        hideElement('feedback-section');
-      } else if (action === 'both-bad') {
-        if (bothBadCount >= MAX_BOTH_BAD) {
-          updateStatus('template-status', '❌ Maximum regeneration attempts reached.', 'error');
+      try {
+        if (action === 'like-first' || action === 'like-second') {
+          const index = action === 'like-first' ? 0 : 1;
+          const url = items[index].url;
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `generated-image-${Date.now()}.png`;
+          link.click();
+          updateStatus('template-status', '✅ Image downloaded!', 'success');
           hideElement('feedback-section');
-          return;
+        } else if (action === 'both-bad') {
+          if (bothBadCount >= MAX_BOTH_BAD) {
+            updateStatus('template-status', '❌ Maximum regeneration attempts reached.', 'error');
+            hideElement('feedback-section');
+            return;
+          }
+          bothBadCount++;
+          const template = document.querySelector('#template-list input:checked');
+          const prompt = `Generate an image based on the template: ${template.dataset.name}`;
+          const [w, h] = [768, 1024];
+          updateStatus('template-status', '🎨 Regenerating images...', 'working');
+          document.getElementById('generate-images').disabled = true;
+          try {
+            const newItems = await generateTwoImages(prompt, w, h);
+            renderGeneratedImages(newItems, templateId);
+            updateStatus('template-status', '✅ New images generated!', 'success');
+          } catch (e) {
+            console.error('Regeneration error:', e);
+            updateStatus('template-status', `❌ Error: ${e.message || e}`, 'error');
+          } finally {
+            document.getElementById('generate-images').disabled = false;
+          }
         }
-        bothBadCount++;
-        const template = document.querySelector('#template-list input:checked');
-        const prompt = `Generate an image based on the template: ${template.dataset.name}`;
-        const [w, h] = [768, 1024];
-        updateStatus('template-status', '🎨 Regenerating images...', 'working');
-        document.getElementById('generate-images').disabled = true;
-        try {
-          const newItems = await generateTwoImages(prompt, w, h);
-          renderGeneratedImages(newItems, templateId);
-          updateStatus('template-status', '✅ New images generated!', 'success');
-        } catch (e) {
-          updateStatus('template-status', `❌ Error: ${e.message || e}`, 'error');
-        } finally {
-          document.getElementById('generate-images').disabled = false;
-        }
+      } catch (err) {
+        console.error('Feedback error:', err);
+        updateStatus('template-status', `❌ Error: ${err.message}`, 'error');
       }
     }
 
     async function loadRecords() {
       const recordsList = document.getElementById('records-list');
       recordsList.innerHTML = '';
-      const snapshot = await db.collection('generations')
-        .where('userId', '==', currentUser.uid)
-        .orderBy('createdAt', 'desc')
-        .limit(3)
-        .get();
-      snapshot.forEach(doc => {
-        const record = doc.data();
-        record.images.forEach((url, idx) => {
-          const card = document.createElement('div');
-          card.className = 'card';
-          card.innerHTML = `
-            <img src="${url}" alt="Past image ${idx + 1}" loading="lazy"/>
-            <button class="btn btn-small" onclick="downloadImage('${url}')">Download</button>
-          `;
-          recordsList.appendChild(card);
+      try {
+        const snapshot = await db.collection('generations')
+          .where('userId', '==', currentUser.uid)
+          .orderBy('createdAt', 'desc')
+          .limit(3)
+          .get();
+        snapshot.forEach(doc => {
+          const record = doc.data();
+          record.images.forEach((url, idx) => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.innerHTML = `
+              <img src="${url}" alt="Past image ${idx + 1}" loading="lazy"/>
+              <button class="btn btn-small" onclick="downloadImage('${url}')">Download</button>
+            `;
+            recordsList.appendChild(card);
+          });
         });
-      });
+        console.log('Records loaded:', snapshot.size);
+      } catch (err) {
+        console.error('Error loading records:', err);
+        updateStatus('records-status', 'Error loading records: ' + err.message, 'error');
+      }
     }
 
     function downloadImage(url) {
@@ -874,10 +930,41 @@
           createdBy: currentUser.uid,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
+        console.log('Template created:', { name, code });
         showMessage('master-msg', 'Template created successfully!', 'success');
         renderTemplateManagement();
       } catch (err) {
+        console.error('Template creation error:', err);
         showMessage('master-msg', err.message, 'error');
+      }
+    }
+
+    async function uploadTemplates(file) {
+      try {
+        showMessage('master-msg', 'Processing template file...', 'info');
+        const templates = await processXlsxFile(file);
+        if (!templates.length) {
+          showMessage('master-msg', 'No valid templates found in file.', 'error');
+          return;
+        }
+        const batch = db.batch();
+        templates.forEach(name => {
+          const code = Math.floor(100000 + Math.random() * 900000).toString();
+          const docRef = db.collection('templates').doc();
+          batch.set(docRef, {
+            name,
+            code,
+            createdBy: currentUser.uid,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        });
+        await batch.commit();
+        console.log('Templates uploaded:', templates);
+        showMessage('master-msg', `Successfully uploaded ${templates.length} templates!`, 'success');
+        renderTemplateManagement();
+      } catch (err) {
+        console.error('Template upload error:', err);
+        showMessage('master-msg', 'Error uploading templates: ' + err.message, 'error');
       }
     }
 
@@ -885,9 +972,11 @@
       try {
         showMessage('master-msg', 'Deleting template...', 'info');
         await db.collection('templates').doc(templateId).delete();
+        console.log('Template deleted:', templateId);
         showMessage('master-msg', 'Template deleted successfully!', 'success');
         renderTemplateManagement();
       } catch (err) {
+        console.error('Template deletion error:', err);
         showMessage('master-msg', err.message, 'error');
       }
     }
@@ -901,16 +990,22 @@
     async function renderTemplateManagement() {
       const managementDiv = document.getElementById('template-management');
       managementDiv.innerHTML = '<h3>Manage Templates</h3>';
-      const snapshot = await db.collection('templates').get();
-      const templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      templates.forEach(template => {
-        const div = document.createElement('div');
-        div.innerHTML = `
-          <p>${template.name} (Code: ${template.code})
-          <button class="btn btn-small" onclick="deleteTemplate('${template.id}')">Delete</button></p>
-        `;
-        managementDiv.appendChild(div);
-      });
+      try {
+        const snapshot = await db.collection('templates').get();
+        const templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        templates.forEach(template => {
+          const div = document.createElement('div');
+          div.innerHTML = `
+            <p>${template.name} (Code: ${template.code})
+            <button class="btn btn-small" onclick="deleteTemplate('${template.id}')">Delete</button></p>
+          `;
+          managementDiv.appendChild(div);
+        });
+        console.log('Template management rendered:', templates);
+      } catch (err) {
+        console.error('Error rendering templates:', err);
+        showMessage('master-msg', 'Error loading templates: ' + err.message, 'error');
+      }
     }
 
     // Image Generation Functions
@@ -1009,19 +1104,27 @@
         const name = document.getElementById('template-name').value;
         if (name) createTemplate(name);
       });
+      document.getElementById('upload-template').addEventListener('click', () => {
+        const fileInput = document.getElementById('template-file');
+        if (fileInput.files.length) {
+          uploadTemplates(fileInput.files[0]);
+        } else {
+          showMessage('master-msg', 'Please select an XLSX file.', 'error');
+        }
+      });
       document.getElementById('generate-code').addEventListener('click', generateIndustryCode);
 
       // Initialize
       showAuth();
 
-      // Pre-fill master account for convenience (in practice, remove this)
+      // Pre-fill master account for convenience (remove in production)
       if (!currentUser) {
         document.getElementById('login-email').value = 'langtechgroup5@gmail.com';
         document.getElementById('login-password').value = 'qaz1234567890-';
       }
     });
 
-    // Expose deleteTemplate for inline onclick
+    // Expose functions for inline onclick
     window.deleteTemplate = deleteTemplate;
     window.downloadImage = downloadImage;
   </script>
