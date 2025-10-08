@@ -768,6 +768,10 @@
           const snapshot = await db.collection('templates').get();
           templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         } else {
+          if (!userData.industryCode) {
+            templateList.innerHTML = '<p>No industry code set for your account. Please contact admin.</p>';
+            return;
+          }
           const snapshot = await db.collection('templates').where('code', '==', userData.industryCode).get();
           templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         }
@@ -778,7 +782,7 @@
             const div = document.createElement('div');
             div.innerHTML = `
               <label>
-                <input type="radio" name="template" value="${template.id}" data-name="${template.name}">
+                <input type="checkbox" value="${template.id}" data-name="${template.name}">
                 ${template.name} (Code: ${template.code})
               </label>
             `;
@@ -798,16 +802,16 @@
         return;
       }
 
-      const selectedTemplateInput = document.querySelector('#template-list input[name="template"]:checked');
-      if (!selectedTemplateInput) {
-        updateStatus('template-status', '⚠️ Please select a template.', 'error');
+      const selectedTemplates = Array.from(document.querySelectorAll('#template-list input:checked')).map(input => ({
+        id: input.value,
+        name: input.dataset.name
+      }));
+      if (selectedTemplates.length === 0) {
+        updateStatus('template-status', '⚠️ Please select at least one template.', 'error');
         return;
       }
-      const template = {
-        id: selectedTemplateInput.value,
-        name: selectedTemplateInput.dataset.name
-      };
-      const prompt = `Generate an image based on the template: ${template.name}`;
+
+      const prompt = `Generate an image based on the template${selectedTemplates.length > 1 ? 's' : ''}: ${selectedTemplates.map(t => t.name).join(', ')}`;
       const [w, h] = [768, 1024]; // Default size
       bothBadCount = 0;
 
@@ -816,7 +820,7 @@
 
       try {
         const items = await generateTwoImages(prompt, w, h);
-        renderGeneratedImages(items, template.id);
+        renderGeneratedImages(items, selectedTemplates.map(t => t.id));
         showElement('feedback-section');
         updateStatus('template-status', '✅ Images generated successfully!', 'success');
       } catch (e) {
@@ -832,7 +836,7 @@
       return urls.map(url => ({ provider: 'pollinations', url }));
     }
 
-    function renderGeneratedImages(items, templateId) {
+    function renderGeneratedImages(items, templateIds) {
       const container = document.getElementById('generated-images');
       container.innerHTML = '';
       items.forEach((item, idx) => {
@@ -844,14 +848,14 @@
         `;
         container.appendChild(card);
       });
-      saveGenerationRecord(items, templateId);
+      saveGenerationRecord(items, templateIds);
     }
 
-    async function saveGenerationRecord(items, templateId) {
+    async function saveGenerationRecord(items, templateIds) {
       try {
         const record = {
           userId: currentUser.uid,
-          templateId,
+          templateIds,
           images: items.map(item => item.url),
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         };
@@ -873,7 +877,7 @@
       }
     }
 
-    async function handleFeedback(action, items, templateId) {
+    async function handleFeedback(action, items, templateIds) {
       try {
         if (action === 'like-first' || action === 'like-second') {
           const index = action === 'like-first' ? 0 : 1;
@@ -891,14 +895,17 @@
             return;
           }
           bothBadCount++;
-          const selectedTemplateInput = document.querySelector('#template-list input[name="template"]:checked');
-          const prompt = `Generate an image based on the template: ${selectedTemplateInput.dataset.name}`;
+          const selectedTemplates = Array.from(document.querySelectorAll('#template-list input:checked')).map(input => ({
+            id: input.value,
+            name: input.dataset.name
+          }));
+          const prompt = `Generate an image based on the template${selectedTemplates.length > 1 ? 's' : ''}: ${selectedTemplates.map(t => t.name).join(', ')}`;
           const [w, h] = [768, 1024];
           updateStatus('template-status', '🎨 Regenerating images...', 'working');
           document.getElementById('generate-images').disabled = true;
           try {
             const newItems = await generateTwoImages(prompt, w, h);
-            renderGeneratedImages(newItems, templateId);
+            renderGeneratedImages(newItems, selectedTemplates.map(t => t.id));
             updateStatus('template-status', '✅ New images generated!', 'success');
           } catch (e) {
             console.error('Regeneration error:', e);
@@ -1122,18 +1129,18 @@
       document.getElementById('generate-images').addEventListener('click', generateImages);
       document.getElementById('like-first').addEventListener('click', () => {
         const items = Array.from(document.querySelectorAll('#generated-images img')).map(img => ({ url: img.src }));
-        const templateId = document.querySelector('#template-list input[name="template"]:checked').value;
-        handleFeedback('like-first', items, templateId);
+        const templateIds = Array.from(document.querySelectorAll('#template-list input:checked')).map(input => input.value);
+        handleFeedback('like-first', items, templateIds);
       });
       document.getElementById('like-second').addEventListener('click', () => {
         const items = Array.from(document.querySelectorAll('#generated-images img')).map(img => ({ url: img.src }));
-        const templateId = document.querySelector('#template-list input[name="template"]:checked').value;
-        handleFeedback('like-second', items, templateId);
+        const templateIds = Array.from(document.querySelectorAll('#template-list input:checked')).map(input => input.value);
+        handleFeedback('like-second', items, templateIds);
       });
       document.getElementById('both-bad').addEventListener('click', () => {
         const items = Array.from(document.querySelectorAll('#generated-images img')).map(img => ({ url: img.src }));
-        const templateId = document.querySelector('#template-list input[name="template"]:checked').value;
-        handleFeedback('both-bad', items, templateId);
+        const templateIds = Array.from(document.querySelectorAll('#template-list input:checked')).map(input => input.value);
+        handleFeedback('both-bad', items, templateIds);
       });
 
       // Master controls
